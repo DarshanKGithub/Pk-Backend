@@ -34,19 +34,9 @@ public class DatabaseFailFastConfig {
     // Spring profile(s)
     private final Environment environment;
 
-    // Supabase pooler selection (optional):
-    // direct | session_pooler | transaction_pooler
-    // Default: direct
-    @Value("${SUPABASE_CONNECTION_TYPE:direct}")
-    private String supabaseConnectionType;
-
-    // Optional tenant routing values used by Supabase when required.
-    // If your chosen endpoint requires them, set them in Render.
-    @Value("${SUPABASE_EXTERNAL_ID:}")
-    private String supabaseExternalId;
-
-    @Value("${SUPABASE_SNI_HOSTNAME:}")
-    private String supabaseSniHostname;
+    // Optional connection type (e.g., direct, pooler)
+    @Value("${DB_CONNECTION_TYPE:direct}")
+    private String dbConnectionType;
 
     public DatabaseFailFastConfig(Environment environment) {
         this.environment = environment;
@@ -90,7 +80,7 @@ public class DatabaseFailFastConfig {
             ParsedJdbcInfo parsed = parseJdbcUrl(resolvedUrl);
 
             log.info(
-                    "🚀 Starting Spring Boot diagnostics: server.port={}, spring.profiles.active={}, DB.host={}, DB.port={}, DB.database={}, DB.username={}, DB_URL(format)={}, connectionType={}, tenant(external_id_present={}, sni_hostname_present={})",
+                    "🚀 Starting Spring Boot diagnostics: server.port={}, spring.profiles.active={}, DB.host={}, DB.port={}, DB.database={}, DB.username={}, DB_URL(format)={}, connectionType={}",
                     serverPort,
                     activeProfilesStr,
                     parsed.host == null ? "" : parsed.host,
@@ -98,9 +88,7 @@ public class DatabaseFailFastConfig {
                     parsed.database == null ? "" : parsed.database,
                     dbUsername,
                     maskJdbcUrl(resolvedUrl),
-                    supabaseConnectionType,
-                    !isBlank(supabaseExternalId),
-                    !isBlank(supabaseSniHostname)
+                    dbConnectionType
             );
 
             // Try a real connection.
@@ -127,13 +115,13 @@ public class DatabaseFailFastConfig {
             logExceptionChain(e);
 
             if (resolvedNoPassword != null) {
-                log.error("Supabase/JDBC exact URL used (password/user masked) => {}", resolvedNoPassword);
+                log.error("JDBC exact URL used (password/user masked) => {}", resolvedNoPassword);
             }
 
             String full = (e.toString() + " " + (e.getMessage() == null ? "" : e.getMessage())).toLowerCase();
-            if (full.contains("enoidentifier") || full.contains("external_id") || full.contains("sni_hostname")) {
+            if (full.contains("enoidentifier") || full.contains("endpoint")) {
                 log.error(
-                        "Supabase rejected the connection because tenant routing identifiers are missing or the selected endpoint/pooler doesn't match the JDBC URL. Fix by setting DB_URL to the exact Supabase JDBC URL for Direct/Session Pooler/Transaction Pooler, and ensure required tenant params are present (external_id and/or sni_hostname).");
+                        "Database rejected the connection. Ensure your Neon endpoint matches the JDBC URL and all required parameters are passed.");
             }
 
             // Re-throw to stop Spring Boot startup early.
@@ -145,8 +133,8 @@ public class DatabaseFailFastConfig {
 
     private ParsedJdbcInfo parseJdbcUrl(String jdbcUrl) {
         try {
-            // Example Supabase JDBC format:
-            // jdbc:postgresql://aws-xyz.pooler.supabase.com:6543/postgres?sslmode=...&...&external_id=...
+            // Example JDBC format:
+            // jdbc:postgresql://ep-xyz.aws.neon.tech/neondb?sslmode=require
             String working = jdbcUrl;
             String withoutPrefix = working.substring("jdbc:postgresql://".length());
 
@@ -218,45 +206,17 @@ public class DatabaseFailFastConfig {
 
 
     private String resolveJdbcUrl() {
-        // If DB_URL is already a JDBC URL, we will optionally append Supabase tenant routing params if needed.
+        // If DB_URL is already a JDBC URL, return it
         // If DB_URL is not JDBC, we fail fast in verifyDatabaseConnectionBeforeHibernate().
         String url = dbUrl;
         if (url == null) return null;
 
-        // Normalize type: direct/session_pooler/transaction_pooler
-        String type = supabaseConnectionType == null ? "direct" : supabaseConnectionType.trim().toLowerCase();
-
-        // We do not attempt to guess Supabase host/port here (that depends on your Render secrets).
-        // Instead, we ensure required tenant routing params are present if your endpoint requires them.
-        // If your Render DB_URL already encodes the right host/port, this will be enough.
-        // If you need different host/port selection, set DB_URL to the right endpoint.
-
-        // Determine whether we should append routing params
-        boolean hasExternal = !isBlank(supabaseExternalId);
-        boolean hasSni = !isBlank(supabaseSniHostname);
-
-        if (!hasExternal && !hasSni) {
-            // No tenant routing params; return URL as-is.
-            // This will surface the exact Supabase error you reported, but earlier.
-            return url;
-        }
-
-        StringBuilder sb = new StringBuilder(url);
-        char joiner = url.contains("?") ? '&' : '?';
-
-        if (hasExternal) {
-            sb.append(joiner).append("external_id=").append(encodeQueryParam(supabaseExternalId));
-            joiner = '&';
-        }
-        if (hasSni) {
-            sb.append(joiner).append("sni_hostname=").append(encodeQueryParam(supabaseSniHostname));
-        }
-
-        String resolved = sb.toString();
+        // Normalize type
+        String type = dbConnectionType == null ? "direct" : dbConnectionType.trim().toLowerCase();
 
         // Type is informational only for now; correct endpoint selection must be done via DB_URL.
-        log.info("Supabase connection type requested={}, resolved JDBC URL with tenant params if present.", type);
-        return resolved;
+        log.info("Database connection type requested={}, resolved JDBC URL.", type);
+        return url;
     }
 
     private static boolean isBlank(String s) {
@@ -275,7 +235,6 @@ public class DatabaseFailFastConfig {
         String masked = jdbcUrl;
         masked = masked.replaceAll("(?i)(password=)([^&]*)", "$1***");
         masked = masked.replaceAll("(?i)(user=)([^&]*)", "$1***");
-        // Some Supabase URLs may include creds via other params; keep this conservative.
         return masked;
     }
 
