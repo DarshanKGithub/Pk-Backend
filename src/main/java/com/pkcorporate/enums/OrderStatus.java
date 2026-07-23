@@ -1,0 +1,16 @@
+package com.pkcorporate.enums;
+
+public enum OrderStatus {
+    PENDING,
+    PAYMENT_PENDING,
+    PAYMENT_VERIFIED,
+    DESIGN_IN_PROGRESS,
+    DESIGN_APPROVED,
+    PRODUCTION,
+    QUALITY_CHECK,
+    DISPATCH_READY,
+    DISPATCHED,
+    COMPLETED,
+    CANCELLED,
+    REFUNDED
+}
